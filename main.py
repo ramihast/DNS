@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 import subprocess, os, sys, json, re, ctypes, threading
 
+
 # --------------------------
 # اجرای برنامه با دسترسی ادمین
 # --------------------------
@@ -11,11 +12,13 @@ def is_admin():
     except:
         return False
 
+
 if not is_admin():
     script = sys.executable
     params = " ".join([f'"{a}"' for a in sys.argv])
     ctypes.windll.shell32.ShellExecuteW(None, "runas", script, params, None, 1)
     sys.exit()
+
 
 # --------------------------
 # مسیرها و تنظیمات اولیه
@@ -26,8 +29,10 @@ icon_path = os.path.join(base_path, "assets", "icon.ico")
 DNS_FILE = os.path.join(base_path, "dns_list.json")
 GAMES_FILE = os.path.join(base_path, "games_list.json")
 
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
+
 
 # --------------------------
 # فونت فارسی Dana
@@ -37,8 +42,10 @@ try:
 except:
     pass
 
+
 # راست‌چین برای متن‌های ترکیبی
 RLM = "\u200f"
+
 
 # --------------------------
 # داده‌های پیش‌فرض
@@ -55,10 +62,12 @@ DEFAULT_DNS = {
     "موارد اضافه شده": {}
 }
 
+
 DEFAULT_GAMES = {
     "Valorant": {"Google": ["8.8.8.8", "8.8.4.4"], "Cloudflare": ["1.1.1.1", "1.0.0.1"]},
     "CS2": {"Shecan": ["178.22.122.100", "185.51.200.2"], "Radar": ["10.202.10.10", "10.202.10.11"]}
 }
+
 
 # --------------------------
 # توابع کمکی
@@ -74,46 +83,25 @@ def load_json_safe(path, default):
     except:
         return default
 
+
 def save_json_safe(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
+
 def ping_latency(ip, timeout_ms=2000):
-    """
-    پینگ یک IP و برگرداندن latency به میلی‌ثانیه.
-    در صورت ناموفق: float('inf')
-    """
     try:
-        # تشخیص نسخه IP برای سوییچ مناسب
         af_switch = "-6" if ":" in ip else "-4"
-
-        # ساخت آرگومان‌ها: گزینه‌ها قبل از IP
         args = ["ping", af_switch, "-n", "1", "-w", str(timeout_ms), ip]
-
-        r = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",     # خروجی یونیکد
-            errors="ignore"       # اگر کانال کدنویسی متفاوت بود، کرش نکن
-        )
-
-        # اگر کد خروجی غیر صفره، احتمال زیاد پینگ شکست خورده
+        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if r.returncode != 0:
-            # بازم یک شانس می‌دیم: اگر TTL دیدیم یعنی پاسخ بوده ولی returncode عجیبه
             if "TTL=" not in r.stdout.upper():
                 return float("inf")
-
         s = r.stdout
-
-        # حالت خاص: <1ms
         if re.search(r"<\s*1\s*ms", s, flags=re.IGNORECASE):
             return 1
-
-        # عمومی‌ترین الگو روی ویندوز: هر جایی که «عدد + ms» بیاد
         m = re.search(r"(\d+)\s*ms", s, flags=re.IGNORECASE)
         return int(m.group(1)) if m else float("inf")
-
     except Exception:
         return float("inf")
 
@@ -124,445 +112,453 @@ def ping_latency(ip, timeout_ms=2000):
 class DNSGameOptimizer:
     def __init__(self):
         self.root = ctk.CTk()
-
-        # آیکون برنامه
+        
+        # آیکون
         if os.path.exists(icon_path):
             try:
                 self.root.iconbitmap(icon_path)
-            except Exception as e:
-                print("⚠️ آیکون لود نشد:", e)
+            except:
+                pass
 
         self.root.title(f"{RLM}🎮 DNS بهینه ساز")
         self.root.geometry("880x740")
         self.root.resizable(False, False)
 
-        # 🎨 رنگ‌ها
+        # رنگ‌ها
         self.green = "#2fc973"
         self.dark = "#1e1e1e"
         self.darker = "#1b1b1b"
         self.card = "#2a2f2a"
+        self.blue = "#3b82f6"
 
-        # 🔤 فونت‌ها (همه بولد)
+        # فونت‌ها (دقیقاً یکسان)
+        self.font_title = ctk.CTkFont(family="Dana", size=22, weight="bold")
+        self.font_header = ctk.CTkFont(family="Dana", size=15, weight="bold")
         self.font_normal = ctk.CTkFont(family="Dana", size=13, weight="bold")
-        self.font_bold = ctk.CTkFont(family="Dana", size=22, weight="bold")
 
-        # 📂 داده‌ها
+        # داده‌ها
         self.dns_data = load_json_safe(DNS_FILE, DEFAULT_DNS)
         self.games_data = load_json_safe(GAMES_FILE, DEFAULT_GAMES)
-        self.selected_interface = ctk.StringVar(value=self.detect_active_interface() or f"{RLM}(یافت نشد)")
+
+        self.interface_names = []
+        self.selected_interface = ctk.StringVar(value=f"{RLM}(در حال بارگذاری...)")
         self.protocol_mode = ctk.StringVar(value="IPv4")
 
+        self.update_interface_list()
         self.setup_ui()
 
-    # --------------------------
-    # رابط کاربری
-    # --------------------------
+    def get_all_interfaces(self):
+        """پیدا کردن همه اینترفیس‌ها + تشخیص فعال"""
+        interfaces = []
+        try:
+            r = subprocess.run("netsh interface show interface", shell=True,
+                              capture_output=True, text=True, encoding="utf-8")
+            lines = r.stdout.splitlines()
+            
+            active_interfaces = []
+            all_interfaces = []
+            
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('=') or line.startswith('-'):
+                    continue
+                if 'Admin State' in line and 'State' in line:
+                    continue
+                
+                parts = re.split(r'\s{2,}', line)
+                if len(parts) >= 4:
+                    name = parts[-1].strip('"\'')
+                    if name and len(name) > 1:
+                        state = "🔥 فعال" if "Connected" in line else "⚪ غیرفعال"
+                        all_interfaces.append((name, state))
+                        if "Connected" in line:
+                            active_interfaces.append((name, state))
+            
+            interfaces = active_interfaces + [i for i in all_interfaces if i not in active_interfaces]
+            
+        except Exception:
+            pass
+        
+        if not interfaces:
+            interfaces = [("Wi-Fi", "🔥 فعال"), ("Ethernet", "⚪ غیرفعال"), ("Local Area Connection", "⚪ غیرفعال")]
+
+        return interfaces[:20]
+
+    def update_interface_list(self):
+        """به‌روزرسانی لیست با اولویت فعال‌ها + نمایش صحیح در منو"""
+        all_interfaces = self.get_all_interfaces()
+        active = [name for name, state in all_interfaces if "فعال" in state]
+        inactive = [name for name, state in all_interfaces if "فعال" not in state]
+        self.interface_names = active + inactive
+        
+        if not self.interface_names:
+            self.interface_names = [f"{RLM}(هیچ اینترفیسی یافت نشد)"]
+        
+        # ✅ مهم: به‌روزرسانی منو با مقدار انتخابی فعلی
+        current_selection = self.selected_interface.get()
+        if current_selection not in self.interface_names:
+            self.selected_interface.set(self.interface_names[0])
+        
+        # ✅ به‌روزرسانی منو
+        if hasattr(self, 'interface_menu'):
+            self.interface_menu.configure(values=self.interface_names)
+            # تنظیم متن نمایش داده شده
+            self.interface_menu._text_label.configure(text=self.selected_interface.get())
+
+    def on_interface_change(self, selection):
+        """✅ نمایش دقیق انتخاب در منوی بسته"""
+        self.selected_interface.set(selection)
+        
+        # ✅ به‌روزرسانی متن منوی بسته
+        if hasattr(self, 'interface_menu'):
+            self.interface_menu._text_label.configure(text=selection)
+        
+        if hasattr(self, 'status'):
+            self.status.configure(text=f"✅ انتخاب شد: {selection}", text_color=self.green)
+
+    def refresh_interfaces(self):
+        self.update_interface_list()
+        self.status.configure(text="✅ لیست تازه‌سازی شد", text_color=self.green)
+
     def setup_ui(self):
         title = ctk.CTkFrame(self.root, fg_color=self.dark)
         title.pack(fill="x", pady=10)
-        ctk.CTkLabel(title, text=f"{RLM}🎮 DNS بهینه‌ ساز ", text_color=self.green,
-                     font=self.font_bold).pack()
-        ctk.CTkLabel(title, text=f"{RLM} پینگ بهتری داشته باش", text_color="#bfbfbf",
-                     font=self.font_normal).pack()
+        ctk.CTkLabel(title, text=f"{RLM}🎮 DNS بهینه‌ساز", text_color=self.green, 
+                    font=self.font_title).pack()
+        ctk.CTkLabel(title, text=f"{RLM}پینگ بهتری داشته باش", text_color="#bfbfbf", 
+                    font=self.font_normal).pack()
 
-        # نوار بالا
         topbar = ctk.CTkFrame(self.root, fg_color=self.darker)
         topbar.pack(fill="x", padx=15, pady=(5, 0))
+        
+        ctk.CTkButton(topbar, text=f"{RLM}➕ DNS جدید", width=140, fg_color=self.green, 
+                     hover_color="#23985d", text_color=self.darker, font=self.font_normal, 
+                     command=self.open_add_dns_window).pack(side="left", padx=5, pady=6)
+        
+        ctk.CTkButton(topbar, text=f"{RLM}📡 پینگ همه", width=140, fg_color=self.green, 
+                     hover_color="#23985d", text_color=self.darker, font=self.font_normal, 
+                     command=self.ping_all_dns).pack(side="left", padx=5, pady=6)
+        
+        ctk.CTkButton(topbar, text=f"{RLM}👁️ DNS فعلی", width=170, fg_color=self.green, 
+                     hover_color="#23985d", text_color=self.darker, font=self.font_normal, 
+                     command=self.show_current_dns).pack(side="right", padx=10, pady=6)
 
-        self.btn_add = ctk.CTkButton(topbar, text=f"{RLM}DNS افزودن", width=140,
-                                     fg_color=self.green, hover_color="#23985d",
-                                     text_color=self.darker, font=self.font_normal,
-                                     command=self.open_add_dns_window)
-        self.btn_add.pack(side="left", padx=5, pady=6)
-
-        self.btn_pingall = ctk.CTkButton(topbar, text=f"{RLM} پینگ همگانی", width=140,
-                                         fg_color=self.green, hover_color="#23985d",
-                                         text_color=self.darker, font=self.font_normal,
-                                         command=self.ping_all_dns)
-        self.btn_pingall.pack(side="left", padx=5, pady=6)
-
-        # دکمه «📡 نمایش DNS فعلی» در نوار بالا
-        self.btn_show_dns = ctk.CTkButton(topbar, text=f"{RLM}فعلی DNS نمایش", width=170,
-                                          fg_color=self.green, hover_color="#23985d",
-                                          text_color=self.darker, font=self.font_normal,
-                                          command=self.show_current_dns)
-        self.btn_show_dns.pack(side="right", padx=10, pady=6)
-
-        # تب‌ها
         tabs = ctk.CTkTabview(self.root, width=820, height=540)
         tabs.pack(padx=15, pady=10)
-
-        # استایل تب‌ها
+        
         try:
-            tabs._segmented_button.configure(
-                font=ctk.CTkFont(family="Dana", size=13, weight="bold"),
-                fg_color="#1f1f1f",
-                selected_color="#2b2b2b",
-                selected_hover_color="#333333",
-                text_color=self.green,
-                unselected_text_color="#dddddd"
-            )
-        except Exception:
-            tabs._segmented_button.configure(
-                font=ctk.CTkFont(family="Dana", size=13, weight="bold"),
-                fg_color="#1f1f1f",
-                selected_color="#2b2b2b",
-                selected_hover_color="#333333",
-                text_color=self.green
-            )
+            tabs._segmented_button.configure(font=self.font_header, fg_color="#1f1f1f", 
+                                           selected_color="#2b2b2b", text_color=self.green)
+        except:
+            pass
 
-        # تب‌ها
-        self.tab_dns = tabs.add(f"{RLM} DNS")
-        self.tab_games = tabs.add(f"{RLM} بازی‌ها")
-        self.tab_settings = tabs.add(f"{RLM} تنظیمات")
+        self.tab_dns = tabs.add(f"{RLM}DNS")
+        self.tab_games = tabs.add(f"{RLM}بازی‌ها")
+        self.tab_settings = tabs.add(f"{RLM}⚙️ تنظیمات")
 
-        # فریم‌های اصلی تب‌ها
-        self.frame_dns = ctk.CTkFrame(self.tab_dns, fg_color=self.dark, width=790, height=470)
-        self.frame_games = ctk.CTkFrame(self.tab_games, fg_color=self.dark, width=790, height=470)
-        self.frame_settings = ctk.CTkFrame(self.tab_settings, fg_color=self.dark, width=790, height=470)
+        self.frame_dns = ctk.CTkFrame(self.tab_dns, fg_color=self.dark)
+        self.frame_games = ctk.CTkFrame(self.tab_games, fg_color=self.dark)
+        self.frame_settings = ctk.CTkFrame(self.tab_settings, fg_color=self.dark)
         for frame in [self.frame_dns, self.frame_games, self.frame_settings]:
-            frame.pack(pady=10)
+            frame.pack(fill="both", expand=True, pady=10)
 
         self.build_dns_tab()
         self.build_games_tab()
         self.build_settings_tab()
 
-        # وضعیت پایین
-        self.status = ctk.CTkLabel(self.root, text=f"{RLM}✅ آماده", anchor="center",
-                                   font=self.font_normal, text_color=self.green,
-                                   fg_color=self.darker, height=36)
+        self.status = ctk.CTkLabel(self.root, text=f"{RLM}✅ آماده", anchor="center", 
+                                  font=self.font_normal, text_color=self.green, 
+                                  fg_color=self.darker, height=36)
         self.status.pack(side="bottom", fill="x", pady=6)
 
-    # --------------------------
-    # DNS TAB
-    # --------------------------
+    def build_settings_tab(self):
+        main_frame = ctk.CTkFrame(self.frame_settings, fg_color=self.dark)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # کارت کارت شبکه
+        net_card = ctk.CTkFrame(main_frame, fg_color=self.card, corner_radius=15)
+        net_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(net_card, text=f"{RLM}🌐 کارت شبکه فعال", font=self.font_header, 
+                    text_color=self.green).pack(pady=(15, 10))
+        
+        self.interface_menu = ctk.CTkOptionMenu(
+            net_card, variable=self.selected_interface, values=self.interface_names,
+            fg_color=self.darker, button_color=self.green, button_hover_color="#23985d",
+            text_color=self.darker, font=self.font_normal, width=500, height=40,
+            command=self.on_interface_change
+        )
+        self.interface_menu.pack(pady=(0, 15), padx=20)
+        
+        ctk.CTkButton(net_card, text=f"{RLM}🔄 تازه‌سازی", fg_color=self.blue, 
+                     hover_color="#2563eb", text_color="white", font=self.font_normal, 
+                     width=120, command=self.refresh_interfaces).pack()
+
+        # کارت پروتکل
+        proto_card = ctk.CTkFrame(main_frame, fg_color=self.card, corner_radius=15)
+        proto_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(proto_card, text=f"{RLM}🔌 پروتکل", font=self.font_header,
+                    text_color=self.green).pack(pady=(15, 10))
+        
+        self.protocol_menu = ctk.CTkOptionMenu(
+            proto_card, variable=self.protocol_mode, values=["IPv4", "IPv6"],
+            fg_color=self.darker, button_color=self.green, button_hover_color="#23985d",
+            text_color=self.darker, font=self.font_normal, width=200, height=40
+        )
+        self.protocol_menu.pack(pady=(0, 20), padx=20)
+
+        # کارت ابزارها
+        tools_card = ctk.CTkFrame(main_frame, fg_color=self.card, corner_radius=15)
+        tools_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(tools_card, text=f"{RLM}🛠️ ابزارهای سریع", font=self.font_header,
+                    text_color=self.green).pack(pady=(15, 15))
+        
+        btn_frame = ctk.CTkFrame(tools_card, fg_color="transparent")
+        btn_frame.pack(pady=0, padx=20)
+        
+        ctk.CTkButton(btn_frame, text=f"{RLM}🧹 پاک DNS", fg_color="#3fb881", 
+                     hover_color="#2fa668", text_color=self.darker, font=self.font_normal, 
+                     width=140, command=self.flush_dns).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkButton(btn_frame, text=f"{RLM}🔄 ریست شبکه", fg_color="#f59e0b", 
+                     hover_color="#d97706", text_color="white", font=self.font_normal, 
+                     width=140, command=self.restart_network).pack(side="left", padx=10)
+
+    def flush_dns(self):
+        try:
+            subprocess.run("ipconfig /flushdns", shell=True, check=True)
+            self.status.configure(text="✅ کش DNS پاک شد", text_color=self.green)
+        except:
+            messagebox.showerror("خطا", "پاک‌سازی DNS ناموفق")
+
+    def restart_network(self):
+        if messagebox.askyesno("تأیید", "آیا از ریستارت اتصالات شبکه مطمئنید؟"):
+            try:
+                subprocess.run("netsh winsock reset", shell=True)
+                subprocess.run("netsh int ip reset", shell=True)
+                messagebox.showinfo("✅", "شبکه ریستارت شد. لطفاً سیستم را ریستارت کنید.")
+            except:
+                messagebox.showerror("خطا", "ریستارت شبکه ناموفق")
+
     def build_dns_tab(self):
-        self.dns_frame = ctk.CTkScrollableFrame(self.frame_dns, width=760, height=400, fg_color=self.dark)
-        self.dns_frame.pack(pady=10)
+        self.dns_frame = ctk.CTkScrollableFrame(self.frame_dns, fg_color=self.dark)
+        self.dns_frame.pack(fill="both", expand=True, padx=15, pady=15)
         self.refresh_dns_ui()
 
     def refresh_dns_ui(self):
         for w in self.dns_frame.winfo_children():
             w.destroy()
-
+            
         for cat, servers in self.dns_data.items():
-            ctk.CTkLabel(
-                self.dns_frame,
-                text=f"{RLM}📁 {cat}",
-                text_color=self.green,
-                font=ctk.CTkFont(family="Dana", size=15, weight="bold"),
-                anchor="e"
-            ).pack(fill="x", pady=(8, 4))
-
+            ctk.CTkLabel(self.dns_frame, text=f"{RLM}📁 {cat}", text_color=self.green,
+                        font=self.font_header, anchor="e").pack(fill="x", pady=(10, 5))
+            
             grid = ctk.CTkFrame(self.dns_frame, fg_color="transparent")
-            grid.pack(padx=10, pady=4, fill="x")
-
+            grid.pack(pady=5, fill="x")
+            
             row, col = 0, 0
             for name, ips in servers.items():
                 card = ctk.CTkFrame(grid, fg_color=self.card, corner_radius=12)
-                card.grid(row=row, column=col, padx=8, pady=8)
-
-                ctk.CTkLabel(
-                    card,
-                    text=f"{RLM}{name}",
-                    font=ctk.CTkFont(family="Dana", size=14, weight="bold"),
-                    text_color=self.green,
-                    anchor="center"
-                ).pack(pady=(6, 0))
-
-                ctk.CTkLabel(
-                    card,
-                    text="\n".join(ips),
-                    text_color="#ccc",
-                    font=self.font_normal,
-                    anchor="center"
-                ).pack(pady=(0, 6))
-
-                # ردیف دکمه‌های ست و پینگ
-                row_btn = ctk.CTkFrame(card, fg_color="transparent")
-                row_btn.pack(pady=4)
-                ctk.CTkButton(
-                    row_btn,
-                    text=f"{RLM}ست",
-                    width=70,
-                    fg_color=self.green,
-                    hover_color="#23985d",
-                    text_color=self.darker,
-                    font=self.font_normal,
-                    command=lambda n=name, i=ips: self.apply_dns(n, i)
-                ).pack(side="left", padx=3)
-                ctk.CTkButton(
-                    row_btn,
-                    text=f"{RLM}پینگ",
-                    width=70,
-                    fg_color="#555",
-                    hover_color="#444",
-                    text_color=self.green,
-                    font=self.font_normal,
-                    command=lambda n=name, i=ips: self.ping_single(n, i)
-                ).pack(side="left", padx=3)
-
-                # فقط برای «موارد اضافه شده» دکمه ویرایش / حذف نشان بده
+                card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+                
+                ctk.CTkLabel(card, text=f"{RLM}{name}", font=self.font_header, 
+                           text_color=self.green, anchor="center").pack(pady=(8, 4))
+                ctk.CTkLabel(card, text="\n".join(ips), text_color="#ccc", 
+                           font=self.font_normal, anchor="center").pack(pady=(0, 8))
+                
+                btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+                btn_frame.pack(pady=4)
+                ctk.CTkButton(btn_frame, text=f"{RLM}ست", width=65, fg_color=self.green, 
+                            hover_color="#23985d", text_color=self.darker, font=self.font_normal,
+                            command=lambda n=name, i=ips: self.apply_dns(n, i)).pack(side="left", padx=2)
+                ctk.CTkButton(btn_frame, text=f"{RLM}پینگ", width=65, fg_color="#555", 
+                            hover_color="#444", text_color=self.green, font=self.font_normal,
+                            command=lambda n=name, i=ips: self.ping_single(n, i)).pack(side="left", padx=2)
+                
                 if cat == "موارد اضافه شده":
-                    row_btn2 = ctk.CTkFrame(card, fg_color="transparent")
-                    row_btn2.pack(pady=(0, 6))
-                    ctk.CTkButton(
-                        row_btn2,
-                        text=f"{RLM}✏️ ویرایش",
-                        width=70,
-                        fg_color="#3b82f6",
-                        hover_color="#2563eb",
-                        text_color="white",
-                        font=self.font_normal,
-                        command=lambda c=cat, n=name: self.open_edit_dns_window(c, n)
-                    ).pack(side="left", padx=3)
-                    ctk.CTkButton(
-                        row_btn2,
-                        text=f"{RLM}🗑 حذف",
-                        width=70,
-                        fg_color="#ef4444",
-                        hover_color="#b91c1c",
-                        text_color="white",
-                        font=self.font_normal,
-                        command=lambda c=cat, n=name: self.delete_dns(c, n)
-                    ).pack(side="left", padx=3)
-
+                    edit_frame = ctk.CTkFrame(card, fg_color="transparent")
+                    edit_frame.pack(pady=(0, 8))
+                    ctk.CTkButton(edit_frame, text=f"{RLM}✏️", width=40, fg_color=self.blue, 
+                                hover_color="#2563eb", text_color="white", font=self.font_normal,
+                                command=lambda c=cat, n=name: self.open_edit_dns_window(c, n)).pack(side="left", padx=2)
+                    ctk.CTkButton(edit_frame, text=f"{RLM}🗑", width=40, fg_color="#ef4444", 
+                                hover_color="#b91c1c", text_color="white", font=self.font_normal,
+                                command=lambda c=cat, n=name: self.delete_dns(c, n)).pack(side="left", padx=2)
+                
                 col += 1
                 if col == 3:
                     row += 1
                     col = 0
+            grid.grid_columnconfigure((0,1,2), weight=1)
 
-    # --------------------------
-    # افزودن DNS جدید
-    # --------------------------
     def open_add_dns_window(self):
         w = ctk.CTkToplevel(self.root)
-        w.title("جدید DNS افزودن")
-        w.geometry("420x300")
+        w.title("➕ DNS جدید")
+        w.geometry("420x320")
         w.configure(fg_color=self.dark)
-
-        ctk.CTkLabel(w, text="نام DNS", text_color=self.green, font=self.font_normal).pack(pady=(10, 2))
-        name = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        name.pack(pady=(0, 8))
-
-        ctk.CTkLabel(w, text="اصلی IP", text_color=self.green, font=self.font_normal).pack(pady=(5, 2))
-        ip1 = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        ip1.pack(pady=(0, 8))
-
-        ctk.CTkLabel(w, text="ثانویه IP", text_color=self.green, font=self.font_normal).pack(pady=(5, 2))
-        ip2 = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        ip2.pack(pady=(0, 10))
-
+        
+        ctk.CTkLabel(w, text=f"{RLM}نام DNS", text_color=self.green, 
+                    font=self.font_normal).pack(pady=(15, 5))
+        name = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        name.pack(pady=5)
+        
+        ctk.CTkLabel(w, text=f"{RLM}IP اصلی", text_color=self.green, 
+                    font=self.font_normal).pack(pady=(10, 5))
+        ip1 = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        ip1.pack(pady=5)
+        
+        ctk.CTkLabel(w, text=f"{RLM}IP دوم (اختیاری)", text_color=self.green, 
+                    font=self.font_normal).pack(pady=(10, 5))
+        ip2 = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        ip2.pack(pady=(0, 15))
+        
         def save():
             n, i1, i2 = name.get().strip(), ip1.get().strip(), ip2.get().strip()
             if not n or not i1:
-                messagebox.showwarning("⚠️ خطا", "لطفاً نام و IP اصلی را وارد کنید.")
-                return
-            # ذخیره در دسته «موارد اضافه شده»
+                return messagebox.showwarning("⚠️", "نام و IP اصلی الزامی است")
             self.dns_data.setdefault("موارد اضافه شده", {})
             if n in self.dns_data["موارد اضافه شده"]:
-                messagebox.showwarning("⚠️ خطا", "DNS دیگری با این نام در موارد اضافه شده وجود دارد.")
-                return
+                return messagebox.showwarning("⚠️", "نام تکراری است")
             self.dns_data["موارد اضافه شده"][n] = [i1, i2] if i2 else [i1]
             save_json_safe(DNS_FILE, self.dns_data)
             self.refresh_dns_ui()
-            self.status.configure(text=f"✅ DNS {n} اضافه شد", text_color=self.green)
+            self.status.configure(text=f"✅ {n} اضافه شد", text_color=self.green)
             w.destroy()
+        
+        ctk.CTkButton(w, text=f"{RLM}💾 ذخیره", fg_color=self.green, width=200, 
+                     height=40, font=self.font_normal, command=save).pack()
 
-        ctk.CTkButton(w, text="💾 ذخیره", fg_color=self.green, hover_color="#23985d",
-                      text_color=self.darker, width=160, font=self.font_normal,
-                      command=save).pack(pady=(10, 15))
-
-    # --------------------------
-    # ویرایش DNS کاربر
-    # --------------------------
     def open_edit_dns_window(self, category, dns_name):
-        # فقط روی موارد اضافه شده منطقی است، ولی برای اطمینان چک می‌کنیم
         if category != "موارد اضافه شده":
-            messagebox.showwarning("⚠️", "فقط DNS های اضافه شده توسط کاربر قابل ویرایش هستند.")
-            return
-
+            return messagebox.showwarning("⚠️", "فقط DNS های اضافه شده قابل ویرایش هستند")
         current_ips = self.dns_data.get(category, {}).get(dns_name, [])
-
+        
         w = ctk.CTkToplevel(self.root)
-        w.title("ویرایش DNS")
-        w.geometry("420x300")
+        w.title("✏️ ویرایش DNS")
+        w.geometry("420x320")
         w.configure(fg_color=self.dark)
-
-        ctk.CTkLabel(w, text="نام DNS", text_color=self.green, font=self.font_normal).pack(pady=(10, 2))
-        name_entry = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        name_entry.pack(pady=(0, 8))
+        
+        ctk.CTkLabel(w, text=f"{RLM}نام DNS", text_color=self.green, font=self.font_normal).pack(pady=(15, 5))
+        name_entry = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        name_entry.pack(pady=5)
         name_entry.insert(0, dns_name)
-
-        ctk.CTkLabel(w, text="اصلی IP", text_color=self.green, font=self.font_normal).pack(pady=(5, 2))
-        ip1_entry = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        ip1_entry.pack(pady=(0, 8))
+        
+        ctk.CTkLabel(w, text=f"{RLM}IP اصلی", text_color=self.green, font=self.font_normal).pack(pady=(10, 5))
+        ip1_entry = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        ip1_entry.pack(pady=5)
         if len(current_ips) >= 1:
             ip1_entry.insert(0, current_ips[0])
-
-        ctk.CTkLabel(w, text="ثانویه IP", text_color=self.green, font=self.font_normal).pack(pady=(5, 2))
-        ip2_entry = ctk.CTkEntry(w, width=320, font=self.font_normal, justify="center")
-        ip2_entry.pack(pady=(0, 10))
+            
+        ctk.CTkLabel(w, text=f"{RLM}IP دوم", text_color=self.green, font=self.font_normal).pack(pady=(10, 5))
+        ip2_entry = ctk.CTkEntry(w, width=350, font=self.font_normal, height=35)
+        ip2_entry.pack(pady=(0, 15))
         if len(current_ips) >= 2:
             ip2_entry.insert(0, current_ips[1])
-
+        
         def save_edit():
             new_name = name_entry.get().strip()
-            i1 = ip1_entry.get().strip()
-            i2 = ip2_entry.get().strip()
-
+            i1, i2 = ip1_entry.get().strip(), ip2_entry.get().strip()
             if not new_name or not i1:
-                messagebox.showwarning("⚠️ خطا", "لطفاً نام و IP اصلی را وارد کنید.")
-                return
-
+                return messagebox.showwarning("⚠️", "نام و IP اصلی الزامی است")
+            
             cat_dict = self.dns_data.setdefault(category, {})
-
-            # اگر نام عوض شده، بررسی تکراری بودن
             if new_name != dns_name and new_name in cat_dict:
-                messagebox.showwarning("⚠️ خطا", "DNS دیگری با این نام در موارد اضافه شده وجود دارد.")
-                return
-
-            # به‌روزرسانی
+                return messagebox.showwarning("⚠️", "نام تکراری است")
+            
             if new_name != dns_name:
                 cat_dict.pop(dns_name, None)
             cat_dict[new_name] = [i1] + ([i2] if i2 else [])
-
-            self.dns_data[category] = cat_dict
+            
             save_json_safe(DNS_FILE, self.dns_data)
             self.refresh_dns_ui()
-            self.status.configure(text=f"✅ DNS {new_name} ویرایش شد", text_color=self.green)
+            self.status.configure(text=f"✅ {new_name} ویرایش شد", text_color=self.green)
             w.destroy()
+        
+        ctk.CTkButton(w, text=f"{RLM}💾 ذخیره", fg_color=self.green, width=200, 
+                     height=40, font=self.font_normal, command=save_edit).pack()
 
-        ctk.CTkButton(
-            w,
-            text="💾 ذخیره تغییرات",
-            fg_color=self.green,
-            hover_color="#23985d",
-            text_color=self.darker,
-            width=180,
-            font=self.font_normal,
-            command=save_edit
-        ).pack(pady=(10, 15))
-
-    # --------------------------
-    # حذف DNS کاربر
-    # --------------------------
     def delete_dns(self, category, dns_name):
         if category != "موارد اضافه شده":
-            messagebox.showwarning("⚠️", "فقط DNS های اضافه شده توسط کاربر قابل حذف هستند.")
+            return messagebox.showwarning("⚠️", "فقط DNS های اضافه شده قابل حذف هستند")
+        if not messagebox.askyesno("حذف", f"آیا از حذف {dns_name} مطمئنید؟"):
             return
-
-        if not messagebox.askyesno("حذف DNS", f"آیا از حذف {dns_name} مطمئن هستید؟"):
-            return
-
         try:
             cat_dict = self.dns_data.get(category, {})
             if dns_name in cat_dict:
                 cat_dict.pop(dns_name)
-                self.dns_data[category] = cat_dict
                 save_json_safe(DNS_FILE, self.dns_data)
                 self.refresh_dns_ui()
-                self.status.configure(text=f"🗑 DNS {dns_name} حذف شد", text_color="#ff5555")
-            else:
-                messagebox.showwarning("⚠️", "این DNS دیگر وجود ندارد.")
+                self.status.configure(text=f"🗑 {dns_name} حذف شد", text_color="#ff5555")
         except Exception as e:
             messagebox.showerror("خطا", str(e))
 
-    # --------------------------
-    # منطق DNS
-    # --------------------------
-    def detect_active_interface(self):
-        try:
-            r = subprocess.run("netsh interface show interface", shell=True, capture_output=True, text=True)
-            for line in r.stdout.splitlines():
-                if "Connected" in line:
-                    return " ".join(line.split()[3:])
-        except:
-            return None
-
     def apply_dns(self, name, ips):
         interface = self.selected_interface.get()
+        if "(هیچ" in interface or "(در حال" in interface:
+            return messagebox.showwarning("⚠️", "لطفاً کارت شبکه مناسب انتخاب کنید")
+        
         proto = self.protocol_mode.get().lower()
         try:
-            subprocess.run(f'netsh interface {proto} delete dnsservers name="{interface}" all', shell=True)
-            subprocess.run(f'netsh interface {proto} set dnsservers name="{interface}" static {ips[0]} primary', shell=True)
+            subprocess.run(f'netsh interface {proto} delete dnsservers "{interface}" all', 
+                         shell=True, check=True)
+            subprocess.run(f'netsh interface {proto} set dnsservers "{interface}" static {ips[0]} primary', 
+                         shell=True, check=True)
             if len(ips) > 1:
-                subprocess.run(f'netsh interface {proto} add dnsservers name="{interface}" {ips[1]} index=2', shell=True)
-            self.status.configure(text=f"✅ DNS {name} ست شد", text_color=self.green)
+                subprocess.run(f'netsh interface {proto} add dnsservers "{interface}" {ips[1]} index=2', 
+                             shell=True, check=True)
+            self.status.configure(text=f"✅ {name} روی {interface} ست شد", text_color=self.green)
+        except subprocess.CalledProcessError:
+            messagebox.showerror("خطا", "تنظیم DNS ناموفق")
         except Exception as e:
             messagebox.showerror("خطا", str(e))
 
     def ping_single(self, name, ips):
         self.status.configure(text=f"{RLM}در حال پینگ {name}...", text_color=self.green)
         lat = ping_latency(ips[0])
-        self.status.configure(text=f"{RLM}پینگ {name}: {lat if lat != float('inf') else 'Timeout'} ms ✅", text_color=self.green)
+        status_text = f"{lat} ms" if lat != float("inf") else "Timeout"
+        self.status.configure(text=f"{RLM}پینگ {name}: {status_text} ✅", text_color=self.green)
 
     def ping_all_dns(self):
         all_ips = [(n, i[0]) for c in self.dns_data.values() for n, i in c.items()]
         if not all_ips:
-            messagebox.showinfo("پینگ", "هیچ DNS ای برای پینگ وجود ندارد.")
-            return
+            return messagebox.showinfo("پینگ", "هیچ DNS ای موجود نیست")
         threading.Thread(target=self._ping_all_thread, args=(all_ips,), daemon=True).start()
 
     def _ping_all_thread(self, dns_list):
         results = []
         total = len(dns_list)
-
         for idx, (n, ip) in enumerate(dns_list, start=1):
-            # آپدیت وضعیت در ترد اصلی
-            def update_status(i=idx, name=n):
-                self.status.configure(
-                    text=f"{RLM}در حال پینگ {i}/{total}: {name}",
-                    text_color=self.green
-                )
-            self.root.after(0, update_status)
-
+            self.root.after(0, lambda i=idx, name=n: self.status.configure(
+                text=f"{RLM}پینگ {i}/{total}: {name}", text_color=self.green))
             lat = ping_latency(ip)
             results.append((n, ip, lat))
+        
+        self.root.after(0, lambda: self.show_ping_results(results))
 
-        # بعد از اتمام پینگ‌ها، نتایج را در پنجره‌ی شیک نشان بده
-        def show_results():
-            if not results:
-                text = "هیچ DNS ای برای پینگ یافت نشد."
-            else:
-                lines = []
-                for name, ip, lat in results:
-                    val = f"{lat} ms" if lat != float("inf") else "Timeout"
-                    lines.append(f"{name}: {ip} → {val}")
-                text = "\n".join(lines)
+    def show_ping_results(self, results):
+        lines = []
+        for name, ip, lat in results:
+            val = f"{lat} ms" if lat != float("inf") else "Timeout"
+            lines.append(f"{name}: {ip} → {val}")
+        text = "\n".join(lines)
+        
+        self.status.configure(text="✅ پینگ کامل شد", text_color=self.green)
+        self.show_text_window("نتایج پینگ", "📊 نتایج پینگ DNS ها", 
+                            f"{len(results)} سرور تست شد", text, 640, 430)
 
-            self.status.configure(
-                text=f"{RLM}✅ پینگ همه DNS ها تمام شد",
-                text_color=self.green
-            )
-
-            self.show_text_window(
-                "نتایج پینگ",
-                "📊 نتایج پینگ همه DNS ها",
-                f"{len(results)} سرور بررسی شد",
-                text,
-                width=640,
-                height=430
-            )
-
-        # اجرا در ترد اصلی
-        self.root.after(0, show_results)
-
-    # --------------------------
-    # تب بازی‌ها
-    # --------------------------
     def build_games_tab(self):
-        frame = ctk.CTkScrollableFrame(self.frame_games, width=760, height=420, fg_color=self.dark)
-        frame.pack(padx=10, pady=10)
-        for g, d in self.games_data.items():
-            box = ctk.CTkFrame(frame, fg_color=self.card, corner_radius=10)
-            box.pack(fill="x", padx=8, pady=8)
-            ctk.CTkLabel(box, text=g, text_color=self.green,
-                         font=ctk.CTkFont(family="Dana", size=14, weight="bold")).pack(anchor="w", padx=10, pady=5)
-            ctk.CTkButton(box, text="🚀 پیدا کردن سریع‌ترین DNS", fg_color=self.green,
-                          hover_color="#23985d", text_color=self.darker,
-                          font=self.font_normal,
-                          command=lambda game=g: self.optimize_for_game(game)).pack(padx=10, pady=5)
+        frame = ctk.CTkScrollableFrame(self.frame_games, fg_color=self.dark)
+        frame.pack(fill="both", expand=True, padx=15, pady=15)
+        for game, dns_list in self.games_data.items():
+            card = ctk.CTkFrame(frame, fg_color=self.card, corner_radius=12)
+            card.pack(fill="x", padx=8, pady=8)
+            ctk.CTkLabel(card, text=f"{RLM}🎮 {game}", font=self.font_header, 
+                        text_color=self.green).pack(pady=(12, 8), padx=15, anchor="w")
+            ctk.CTkButton(card, text=f"{RLM}🚀 بهترین DNS", fg_color=self.green, 
+                         hover_color="#23985d", text_color=self.darker, font=self.font_normal,
+                         command=lambda g=game: self.optimize_for_game(g)).pack(pady=8, padx=15)
 
     def optimize_for_game(self, game):
         dns_list = self.games_data.get(game, {})
@@ -573,116 +569,44 @@ class DNSGameOptimizer:
                 best_lat, best = lat, (name, ips)
         if best:
             self.apply_dns(best[0], best[1])
-            messagebox.showinfo("🎯 نتیجه", f"بهترین DNS برای {game}:\n{best[0]} ({best[1][0]}) → {best_lat}ms")
+            messagebox.showinfo("🎯", f"بهترین DNS برای {game}:\n{best[0]}\n{best[1][0]} → {best_lat}ms")
         else:
-            messagebox.showwarning("⚠️", "هیچ DNS مناسبی یافت نشد.")
+            messagebox.showwarning("⚠️", "DNS مناسب یافت نشد")
 
-    # --------------------------
-    # تب تنظیمات
-    # --------------------------
-    def build_settings_tab(self):
-        frame = ctk.CTkFrame(self.frame_settings, fg_color=self.dark)
-        frame.pack(fill="both", expand=True, pady=20)
-
-        ctk.CTkLabel(frame, text="کارت شبکه:", font=self.font_normal, text_color=self.green).pack()
-        self.interface_menu = ctk.CTkOptionMenu(frame, variable=self.selected_interface,
-                                                values=[self.selected_interface.get()],
-                                                fg_color=self.green, button_color="#23985d",
-                                                text_color=self.darker, font=self.font_normal)
-        self.interface_menu.pack(pady=5)
-
-        ctk.CTkLabel(frame, text="پروتکل:", font=self.font_normal, text_color=self.green).pack()
-        self.protocol_menu = ctk.CTkOptionMenu(frame, variable=self.protocol_mode,
-                                               values=["IPv4", "IPv6"],
-                                               fg_color=self.green, button_color="#23985d",
-                                               text_color=self.darker, font=self.font_normal)
-        self.protocol_menu.pack(pady=5)
-
-        ctk.CTkButton(frame, text="🧹 پاک‌سازی کش DNS", fg_color="#3fb881",
-                      hover_color="#2fa668", text_color=self.darker, font=self.font_normal,
-                      command=lambda: subprocess.run("ipconfig /flushdns", shell=True)).pack(pady=5)
-
-    # --------------------------
-    # پنجره‌ی متنی شیک عمومی
-    # --------------------------
-    def show_text_window(self, win_title, header_text, subtitle, body_text,
-                         width=560, height=420):
+    def show_text_window(self, win_title, header_text, subtitle, body_text, width=560, height=420):
         w = ctk.CTkToplevel(self.root)
         w.title(win_title)
         w.geometry(f"{width}x{height}")
         w.configure(fg_color=self.dark)
-
-        # هدر
-        ctk.CTkLabel(
-            w,
-            text=f"{RLM}{header_text}",
-            text_color=self.green,
-            font=self.font_bold
-        ).pack(pady=(12, 4))
-
-        # توضیح زیر هدر (اختیاری)
+        
+        ctk.CTkLabel(w, text=f"{RLM}{header_text}", text_color=self.green, 
+                    font=self.font_title).pack(pady=(15, 5))
         if subtitle:
-            ctk.CTkLabel(
-                w,
-                text=f"{RLM}{subtitle}",
-                text_color="#bfbfbf",
-                font=self.font_normal
-            ).pack(pady=(0, 6))
-
-        # باکس متن (اسکرول‌دار)
-        box = ctk.CTkTextbox(
-            w,
-            width=width - 40,
-            height=height - 140,
-            fg_color=self.card,
-            text_color="#f3f3f3",
-            font=self.font_normal,
-            activate_scrollbars=True
-        )
-        box.pack(padx=15, pady=(5, 10), fill="both", expand=True)
+            ctk.CTkLabel(w, text=f"{RLM}{subtitle}", text_color="#bfbfbf", 
+                        font=self.font_normal).pack(pady=(0, 10))
+        
+        box = ctk.CTkTextbox(w, width=width-40, height=height-140, fg_color=self.card,
+                           text_color="#f3f3f3", font=self.font_normal)
+        box.pack(padx=20, pady=(0, 15), fill="both", expand=True)
         box.insert("1.0", body_text)
         box.configure(state="disabled")
+        
+        ctk.CTkButton(w, text=f"{RLM}بستن", fg_color=self.green, width=120, height=35,
+                     font=self.font_normal, command=w.destroy).pack()
 
-        # دکمه بستن
-        ctk.CTkButton(
-            w,
-            text=f"{RLM}بستن",
-            width=100,
-            fg_color=self.green,
-            hover_color="#23985d",
-            text_color=self.darker,
-            font=self.font_normal,
-            command=w.destroy
-        ).pack(pady=(0, 10))
-
-    # --------------------------
-    # نمایش DNS فعلی با پنجره شیک
-    # --------------------------
     def show_current_dns(self):
         interface = self.selected_interface.get()
+        if "(هیچ" in interface or "(در حال" in interface:
+            return messagebox.showwarning("⚠️", "کارت شبکه انتخاب کنید")
+        
         proto = self.protocol_mode.get().lower()
+        r = subprocess.run(f'netsh interface {proto} show dnsservers "{interface}"', 
+                         shell=True, capture_output=True, text=True)
+        out = r.stdout.strip() or "هیچ DNS فعالی تنظیم نشده"
+        
+        self.show_text_window("DNS فعلی", "📡 DNS های فعلی", 
+                            f"{interface} | {proto.upper()}", out, 620, 420)
 
-        r = subprocess.run(
-            f'netsh interface {proto} show dnsservers name="{interface}"',
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        out = r.stdout.strip() or "هیچ DNS فعالی نیست."
-
-        subtitle = f"{interface}  |  {proto.upper()}"
-        self.show_text_window(
-            "DNS فعلی",
-            "📡 DNS فعلی",
-            subtitle,
-            out,
-            width=620,
-            height=420
-        )
-
-    # --------------------------
-    # اجرا
-    # --------------------------
     def run(self):
         self.root.mainloop()
 
