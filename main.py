@@ -1,6 +1,8 @@
 import customtkinter as ctk
 from tkinter import messagebox
 import subprocess, os, sys, json, re, ctypes, threading
+import ipaddress   # ← برای ولیدیت IP ها
+
 
 # --------------------------
 # اجرای برنامه با دسترسی ادمین
@@ -11,11 +13,13 @@ def is_admin():
     except:
         return False
 
+
 if not is_admin():
     script = sys.executable
     params = " ".join([f'"{a}"' for a in sys.argv])
     ctypes.windll.shell32.ShellExecuteW(None, "runas", script, params, None, 1)
     sys.exit()
+
 
 # --------------------------
 # مسیرها و تنظیمات اولیه
@@ -26,8 +30,10 @@ icon_path = os.path.join(base_path, "assets", "icon.ico")
 DNS_FILE = os.path.join(base_path, "dns_list.json")
 GAMES_FILE = os.path.join(base_path, "games_list.json")
 
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
+
 
 # --------------------------
 # فونت فارسی Dana
@@ -37,8 +43,10 @@ try:
 except:
     pass
 
+
 # راست‌چین برای متن‌های ترکیبی
 RLM = "\u200f"
+
 
 # --------------------------
 # داده‌های پیش‌فرض DNS
@@ -62,6 +70,7 @@ DEFAULT_DNS = {
     },
     "موارد اضافه شده": {}
 }
+
 
 # --------------------------
 # بازی‌ها + DNS های پیشنهادی
@@ -119,6 +128,36 @@ DEFAULT_GAMES = {
     }
 }
 
+
+# --------------------------
+# توابع امنیت IP
+# --------------------------
+def is_valid_ip(ip: str) -> bool:
+    """
+    بررسی فرمت IPv4/IPv6 با استفاده از ماژول استاندارد ipaddress
+    """
+    ip = ip.strip()
+    if not ip:
+        return False
+    try:
+        ipaddress.ip_address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def clean_dns_dict(d: dict) -> dict:
+    """
+    هر DNS که IP نامعتبر دارد حذف می‌شود تا فایل خراب برنامه را کرش نکند.
+    """
+    cleaned = {}
+    for name, ips in d.items():
+        valid_ips = [ip for ip in ips if is_valid_ip(ip)]
+        if valid_ips:
+            cleaned[name] = valid_ips
+    return cleaned
+
+
 # --------------------------
 # توابع کمکی
 # --------------------------
@@ -128,14 +167,24 @@ def load_json_safe(path, default):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(default, f, indent=2, ensure_ascii=False)
             return default
+
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+
+        # پاک‌سازی IP های خراب در فایل‌های قبلی
+        if isinstance(data, dict):
+            for cat, servers in list(data.items()):
+                if isinstance(servers, dict):
+                    data[cat] = clean_dns_dict(servers)
+        return data
     except:
         return default
+
 
 def save_json_safe(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
 
 def ping_latency(ip, timeout_ms=2000):
     try:
@@ -152,6 +201,7 @@ def ping_latency(ip, timeout_ms=2000):
         return int(m.group(1)) if m else float("inf")
     except Exception:
         return float("inf")
+
 
 # --------------------------
 # کلاس اصلی
@@ -390,6 +440,7 @@ class DNSGameOptimizer:
                       fg_color="#f59e0b", hover_color="#d97706",
                       text_color="white", font=self.font_normal,
                       width=140, command=self.restart_network).pack(side="left", padx=10)
+
     # ---------------- تب DNS ----------------
     def build_dns_tab(self):
         self.dns_frame = ctk.CTkScrollableFrame(self.frame_dns, fg_color=self.dark)
@@ -457,6 +508,7 @@ class DNSGameOptimizer:
                     col = 0
 
             grid.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
     # ---------------- مدیریت DNS سفارشی ----------------
     def open_add_dns_window(self):
         w = ctk.CTkToplevel(self.root)
@@ -483,18 +535,30 @@ class DNSGameOptimizer:
             n, i1, i2 = name.get().strip(), ip1.get().strip(), ip2.get().strip()
             if not n or not i1:
                 return messagebox.showwarning("⚠️", "نام و IP اصلی الزامی است")
+
+            # چک امنیتی IP ها
+            if not is_valid_ip(i1):
+                return messagebox.showerror("خطا", "IP اصلی نامعتبر است (فرمت IPv4/IPv6 صحیح نیست)")
+            if i2 and not is_valid_ip(i2):
+                return messagebox.showerror("خطا", "IP دوم نامعتبر است (فرمت IPv4/IPv6 صحیح نیست)")
+
             self.dns_data.setdefault("موارد اضافه شده", {})
             if n in self.dns_data["موارد اضافه شده"]:
                 return messagebox.showwarning("⚠️", "نام تکراری است")
-            self.dns_data["موارد اضافه شده"][n] = [i1, i2] if i2 else [i1]
+
+            ips_list = [i1]
+            if i2:
+                ips_list.append(i2)
+
+            self.dns_data["موارد اضافه شده"][n] = ips_list
             save_json_safe(DNS_FILE, self.dns_data)
             self.refresh_dns_ui()
             self.status.configure(text=f"{RLM}✅ {n} اضافه شد", text_color=self.green)
             w.destroy()
 
         ctk.CTkButton(w, text=f"{RLM}💾 ذخیره", fg_color=self.green,
-                     width=200, height=40, font=self.font_normal,
-                     command=save).pack()
+                      width=200, height=40, font=self.font_normal,
+                      command=save).pack()
 
     def open_edit_dns_window(self, category, dns_name):
         if category != "موارد اضافه شده":
@@ -532,13 +596,22 @@ class DNSGameOptimizer:
             if not new_name or not i1:
                 return messagebox.showwarning("⚠️", "نام و IP اصلی الزامی است")
 
+            # چک امنیتی IP ها
+            if not is_valid_ip(i1):
+                return messagebox.showerror("خطا", "IP اصلی نامعتبر است (فرمت IPv4/IPv6 صحیح نیست)")
+            if i2 and not is_valid_ip(i2):
+                return messagebox.showerror("خطا", "IP دوم نامعتبر است (فرمت IPv4/IPv6 صحیح نیست)")
+
             cat_dict = self.dns_data.setdefault(category, {})
             if new_name != dns_name and new_name in cat_dict:
                 return messagebox.showwarning("⚠️", "نام تکراری است")
 
             if new_name != dns_name:
                 cat_dict.pop(dns_name, None)
-            cat_dict[new_name] = [i1] + ([i2] if i2 else [])
+            ips_list = [i1]
+            if i2:
+                ips_list.append(i2)
+            cat_dict[new_name] = ips_list
 
             save_json_safe(DNS_FILE, self.dns_data)
             self.refresh_dns_ui()
@@ -547,8 +620,8 @@ class DNSGameOptimizer:
             w.destroy()
 
         ctk.CTkButton(w, text=f"{RLM}💾 ذخیره", fg_color=self.green,
-                     width=200, height=40, font=self.font_normal,
-                     command=save_edit).pack()
+                      width=200, height=40, font=self.font_normal,
+                      command=save_edit).pack()
 
     def delete_dns(self, category, dns_name):
         if category != "موارد اضافه شده":
@@ -572,14 +645,19 @@ class DNSGameOptimizer:
         if "(هیچ" in interface or "(در حال" in interface:
             return messagebox.showwarning("⚠️", "لطفاً کارت شبکه مناسب انتخاب کنید")
 
+        # چک امنیتی: همه IP ها باید معتبر باشند
+        checked_ips = [ip.strip() for ip in ips if ip.strip()]
+        if not checked_ips or not all(is_valid_ip(ip) for ip in checked_ips):
+            return messagebox.showerror("خطا", "IP های این DNS نامعتبر هستند؛ لطفاً ویرایش کنید.")
+
         proto = self.protocol_mode.get().lower()
         try:
             subprocess.run(f'netsh interface {proto} delete dnsservers "{interface}" all',
                            shell=True, check=True)
-            subprocess.run(f'netsh interface {proto} set dnsservers "{interface}" static {ips[0]} primary',
+            subprocess.run(f'netsh interface {proto} set dnsservers "{interface}" static {checked_ips[0]} primary',
                            shell=True, check=True)
-            if len(ips) > 1:
-                subprocess.run(f'netsh interface {proto} add dnsservers "{interface}" {ips[1]} index=2',
+            if len(checked_ips) > 1:
+                subprocess.run(f'netsh interface {proto} add dnsservers "{interface}" {checked_ips[1]} index=2',
                                shell=True, check=True)
             self.status.configure(text=f"{RLM}✅ {name} روی {interface} ست شد",
                                   text_color=self.green)
@@ -625,7 +703,7 @@ class DNSGameOptimizer:
         self.show_text_window("نتایج پینگ", "📊 نتایج پینگ DNS ها",
                               f"{len(results)} سرور تست شد", text, 640, 430)
 
-    # ---------------- تب بازی‌ها (استایل شبیه DNS) ----------------
+    # ---------------- تب بازی‌ها ----------------
     def build_games_tab(self):
         self.games_frame = ctk.CTkScrollableFrame(self.frame_games, fg_color=self.dark)
         self.games_frame.pack(fill="both", expand=True, padx=15, pady=15)
@@ -659,6 +737,9 @@ class DNSGameOptimizer:
         dns_list = self.games_data.get(game, {})
         best, best_lat = None, float("inf")
         for name, ips in dns_list.items():
+            # فقط IP های معتبر در نظر گرفته شوند
+            if not ips or not is_valid_ip(ips[0]):
+                continue
             lat = ping_latency(ips[0])
             if lat < best_lat:
                 best_lat, best = lat, (name, ips)
